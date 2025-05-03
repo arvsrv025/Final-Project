@@ -39,42 +39,44 @@ def generate_grad_cam(image_bytes, output_dir="outputs"):
     # Preprocess image
     input_arr, original_img = preprocess_image(image_bytes)
 
-    # Get last convolutional layer
+    # Grad-CAM model setup
     grad_model = tf.keras.models.Model(
         [model.inputs], [model.get_layer("conv2d_14").output, model.output]
     )
-    # Note: Replace "conv2d_14" with your last Conv2D layer name if different
 
     with tf.GradientTape() as tape:
         conv_outputs, predictions = grad_model(input_arr)
         predicted_class_idx = tf.argmax(predictions[0])
         loss = predictions[:, predicted_class_idx]
 
+    # Get gradients
     grads = tape.gradient(loss, conv_outputs)
     pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
     conv_outputs = conv_outputs[0]
 
+    # Generate heatmap
     heatmap = tf.reduce_sum(tf.multiply(pooled_grads, conv_outputs), axis=-1)
-
-    # Normalize heatmap
     heatmap = np.maximum(heatmap, 0)
-    heatmap /= tf.math.reduce_max(heatmap) + 1e-8  # Add small epsilon to avoid div by zero
-
-    # Convert to RGB heatmap
+    heatmap /= tf.math.reduce_max(heatmap) + 1e-8
     heatmap = heatmap.numpy()
-    heatmap = cv2.resize(heatmap, IMG_SIZE)
-    heatmap = np.uint8(255 * heatmap)
-    heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
 
-    # Superimpose heatmap onto original image
-    original_img = np.array(original_img)
-    superimposed_img = heatmap * 0.4 + original_img
-    superimposed_img = np.uint8(superimposed_img)
+    # Resize and convert to color
+    heatmap = cv2.resize(heatmap, IMG_SIZE)
+    heatmap_color = cv2.applyColorMap(np.uint8(255 * heatmap), cv2.COLORMAP_JET)
+
+    # Convert original image to OpenCV BGR
+    original_img = cv2.cvtColor(np.array(original_img), cv2.COLOR_RGB2BGR)
+
+    # Blend the heatmap with original image
+    superimposed_img = cv2.addWeighted(original_img, 0.6, heatmap_color, 0.4, 0)
 
     # Save result
     os.makedirs(output_dir, exist_ok=True)
     filename = f"{uuid.uuid4()}.jpg"
     filepath = os.path.join(output_dir, filename)
-    cv2.imwrite(filepath, superimposed_img)
+    
+    success = cv2.imwrite(filepath, superimposed_img)
+    if not success:
+        raise RuntimeError("Grad-CAM image failed to save.")
 
     return filepath
